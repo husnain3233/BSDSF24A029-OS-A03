@@ -1,4 +1,5 @@
 #include "shell.h"
+#include <ctype.h>
 
 #define HISTORY_SIZE 20
 
@@ -9,6 +10,19 @@ static int history_start = 0;
 static const char* builtin_names[] = {
     "cd", "exit", "help", "jobs", "history", NULL
 };
+
+typedef enum {
+    TOK_WORD,
+    TOK_PIPE,
+    TOK_IN,
+    TOK_OUT,
+    TOK_APPEND
+} TokenType;
+
+typedef struct {
+    TokenType type;
+    char* text;
+} Token;
 
 char* read_cmd(char* prompt, FILE* fp) {
     (void)fp;
@@ -48,47 +62,6 @@ static char** shell_completion(const char* text, int start, int end) {
 
 void initialize_readline(void) {
     rl_attempted_completion_function = shell_completion;
-}
-
-char** tokenize(char* cmdline) {
-    if (cmdline == NULL || cmdline[0] == '\0') {
-        return NULL;
-    }
-
-    char** arglist = (char**)malloc(sizeof(char*) * (MAXARGS + 1));
-    for (int i = 0; i < MAXARGS + 1; i++) {
-        arglist[i] = (char*)malloc(sizeof(char) * ARGLEN);
-        memset(arglist[i], 0, ARGLEN);
-    }
-
-    char* cp = cmdline;
-    char* start;
-    int len;
-    int argnum = 0;
-
-    while (*cp != '\0' && argnum < MAXARGS) {
-        while (*cp == ' ' || *cp == '\t') cp++;
-
-        if (*cp == '\0') break;
-
-        start = cp;
-        len = 1;
-        while (*++cp != '\0' && !(*cp == ' ' || *cp == '\t')) {
-            len++;
-        }
-        strncpy(arglist[argnum], start, len);
-        arglist[argnum][len] = '\0';
-        argnum++;
-    }
-
-    if (argnum == 0) {
-        for (int i = 0; i < MAXARGS + 1; i++) free(arglist[i]);
-        free(arglist);
-        return NULL;
-    }
-
-    arglist[argnum] = NULL;
-    return arglist;
 }
 
 void add_to_history(const char* cmdline) {
@@ -147,6 +120,206 @@ char* resolve_history(const char* line) {
     return strdup(history[idx]);
 }
 
+static int is_operator(char c) {
+    return c == '|' || c == '<' || c == '>';
+}
+
+static void free_tokens(Token* tokens, int count) {
+    for (int i = 0; i < count; i++) {
+        free(tokens[i].text);
+    }
+}
+
+static int lex_line(const char* line, Token* tokens, int max_tokens) {
+    int n = 0;
+    const char* p = line;
+
+    while (*p != '\0') {
+        while (isspace((unsigned char)*p)) p++;
+        if (*p == '\0') break;
+
+        if (n >= max_tokens) {
+            fprintf(stderr, "shell: too many tokens\n");
+            free_tokens(tokens, n);
+            return -1;
+        }
+
+        if (*p == '|') {
+            tokens[n].type = TOK_PIPE;
+            tokens[n].text = NULL;
+            n++;
+            p++;
+            continue;
+        }
+
+        if (*p == '<') {
+            tokens[n].type = TOK_IN;
+            tokens[n].text = NULL;
+            n++;
+            p++;
+            continue;
+        }
+
+        if (*p == '>') {
+            if (*(p + 1) == '>') {
+                tokens[n].type = TOK_APPEND;
+                p += 2;
+            } else {
+                tokens[n].type = TOK_OUT;
+                p++;
+            }
+            tokens[n].text = NULL;
+            n++;
+            continue;
+        }
+
+        char buf[MAX_LEN];
+        int len = 0;
+        char quote = 0;
+
+        while (*p != '\0') {
+            char c = *p;
+            if (quote != 0) {
+                if (c == quote) {
+                    quote = 0;
+                } else if (len < MAX_LEN - 1) {
+                    buf[len++] = c;
+                }
+                p++;
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                quote = c;
+                p++;
+                continue;
+            }
+            if (isspace((unsigned char)c) || is_operator(c)) break;
+            if (len < MAX_LEN - 1) buf[len++] = c;
+            p++;
+        }
+
+        if (quote != 0) {
+            fprintf(stderr, "shell: unmatched quote\n");
+            free_tokens(tokens, n);
+            return -1;
+        }
+
+        buf[len] = '\0';
+        tokens[n].type = TOK_WORD;
+        tokens[n].text = strdup(buf);
+        n++;
+    }
+
+    return n;
+}
+
+void free_pipeline(Pipeline* pipeline) {
+    for (int c = 0; c < pipeline->count; c++) {
+        Command* cmd = &pipeline->commands[c];
+        for (int i = 0; i < MAXARGS; i++) {
+            free(cmd->argv[i]);
+        }
+        free(cmd->infile);
+        free(cmd->outfile);
+        memset(cmd, 0, sizeof(Command));
+    }
+    pipeline->count = 0;
+}
+
+int parse_pipeline(const char* line, Pipeline* pipeline) {
+    Token tokens[MAXARGS * MAX_PIPES];
+    int ntokens;
+    int argc = 0;
+    int ok = 1;
+
+    memset(pipeline, 0, sizeof(Pipeline));
+
+    if (line == NULL || line[0] == '\0') {
+        return 0;
+    }
+
+    ntokens = lex_line(line, tokens, MAXARGS * MAX_PIPES);
+    if (ntokens < 0) {
+        return 0;
+    }
+    if (ntokens == 0) {
+        return 0;
+    }
+
+    Command* current = &pipeline->commands[0];
+
+    for (int i = 0; i < ntokens && ok; i++) {
+        Token* token = &tokens[i];
+
+        switch (token->type) {
+            case TOK_WORD:
+                if (argc >= MAXARGS - 1) {
+                    fprintf(stderr, "shell: too many arguments\n");
+                    ok = 0;
+                } else {
+                    current->argv[argc++] = token->text;
+                    token->text = NULL;
+                }
+                break;
+
+            case TOK_PIPE:
+                if (argc == 0) {
+                    fprintf(stderr, "shell: syntax error near '|'\n");
+                    ok = 0;
+                    break;
+                }
+                current->argv[argc] = NULL;
+                pipeline->count++;
+                if (pipeline->count >= MAX_PIPES) {
+                    fprintf(stderr, "shell: too many pipeline stages\n");
+                    ok = 0;
+                    break;
+                }
+                current = &pipeline->commands[pipeline->count];
+                argc = 0;
+                break;
+
+            case TOK_IN:
+            case TOK_OUT:
+            case TOK_APPEND:
+                if (i + 1 >= ntokens || tokens[i + 1].type != TOK_WORD) {
+                    fprintf(stderr, "shell: syntax error near redirection\n");
+                    ok = 0;
+                    break;
+                }
+                i++;
+                if (token->type == TOK_IN) {
+                    free(current->infile);
+                    current->infile = tokens[i].text;
+                } else {
+                    free(current->outfile);
+                    current->outfile = tokens[i].text;
+                    current->append = (token->type == TOK_APPEND);
+                }
+                tokens[i].text = NULL;
+                break;
+        }
+    }
+
+    free_tokens(tokens, ntokens);
+
+    if (!ok) {
+        free_pipeline(pipeline);
+        return 0;
+    }
+
+    if (argc == 0) {
+        fprintf(stderr, "shell: syntax error near end of line\n");
+        free_pipeline(pipeline);
+        return 0;
+    }
+
+    current->argv[argc] = NULL;
+    pipeline->count++;
+
+    return 1;
+}
+
 static void print_help(void) {
     printf("Built-in commands:\n");
     printf("  exit          Exit the shell\n");
@@ -157,6 +330,7 @@ static void print_help(void) {
     printf("  !n            Re-execute command number n from history\n");
     printf("  Tab           Complete commands and filenames\n");
     printf("  Up/Down       Browse Readline command history\n");
+    printf("Operators: < input  > output  >> append  | pipe\n");
 }
 
 int handle_builtin(char** arglist) {

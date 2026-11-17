@@ -3,7 +3,7 @@
 int main() {
     char* raw;
     char* cmdline;
-    char** arglist;
+    Pipeline pipeline;
 
     initialize_readline();
 
@@ -17,16 +17,18 @@ int main() {
 
         add_to_history(cmdline);
 
-        if ((arglist = tokenize(cmdline)) != NULL) {
-            if (!handle_builtin(arglist)) {
-                execute(arglist);
+        if (parse_pipeline(cmdline, &pipeline)) {
+            int handled = 0;
+            Command* single = &pipeline.commands[0];
+            if (pipeline.count == 1 && single->infile == NULL && single->outfile == NULL) {
+                handled = handle_builtin(single->argv);
             }
-
-            for (int i = 0; arglist[i] != NULL; i++) {
-                free(arglist[i]);
+            if (!handled) {
+                execute_pipeline(&pipeline);
             }
-            free(arglist);
+            free_pipeline(&pipeline);
         }
+
         free(cmdline);
     }
 
