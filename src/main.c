@@ -5,6 +5,8 @@ int main() {
     char* cmdline;
     char** arglist;
 
+    initialize_readline();
+
     while ((raw = read_cmd(PROMPT, stdin)) != NULL) {
         cmdline = resolve_history(raw);
         free(raw);

@@ -10,6 +10,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #define MAX_LEN 512
 #define MAXARGS 10
@@ -23,5 +25,6 @@ int handle_builtin(char** arglist);
 void add_to_history(const char* cmdline);
 void print_history(void);
 char* resolve_history(const char* line);
+void initialize_readline(void);
 
 #endif

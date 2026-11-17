@@ -6,23 +6,48 @@ static char* history[HISTORY_SIZE];
 static int history_count = 0;
 static int history_start = 0;
 
+static const char* builtin_names[] = {
+    "cd", "exit", "help", "jobs", "history", NULL
+};
+
 char* read_cmd(char* prompt, FILE* fp) {
-    printf("%s", prompt);
-    char* cmdline = (char*)malloc(sizeof(char) * MAX_LEN);
-    int c, pos = 0;
+    (void)fp;
+    char* line = readline(prompt);
+    if (line != NULL && line[0] != '\0') {
+        add_history(line);
+    }
+    return line;
+}
 
-    while ((c = getc(fp)) != EOF) {
-        if (c == '\n') break;
-        if (pos < MAX_LEN - 1) cmdline[pos++] = c;
+static char* command_generator(const char* text, int state) {
+    static int index = 0;
+    static size_t len = 0;
+
+    if (state == 0) {
+        index = 0;
+        len = strlen(text);
     }
 
-    if (c == EOF && pos == 0) {
-        free(cmdline);
-        return NULL;
+    while (builtin_names[index] != NULL) {
+        const char* name = builtin_names[index++];
+        if (strncmp(name, text, len) == 0) {
+            return strdup(name);
+        }
     }
+    return NULL;
+}
 
-    cmdline[pos] = '\0';
-    return cmdline;
+static char** shell_completion(const char* text, int start, int end) {
+    (void)end;
+    rl_attempted_completion_over = 1;
+    if (start == 0) {
+        return rl_completion_matches(text, command_generator);
+    }
+    return rl_completion_matches(text, rl_filename_completion_function);
+}
+
+void initialize_readline(void) {
+    rl_attempted_completion_function = shell_completion;
 }
 
 char** tokenize(char* cmdline) {
@@ -130,6 +155,8 @@ static void print_help(void) {
     printf("  jobs          List background jobs (placeholder)\n");
     printf("  history       Show previously entered commands\n");
     printf("  !n            Re-execute command number n from history\n");
+    printf("  Tab           Complete commands and filenames\n");
+    printf("  Up/Down       Browse Readline command history\n");
 }
 
 int handle_builtin(char** arglist) {

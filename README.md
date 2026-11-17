@@ -4,6 +4,8 @@ A custom UNIX shell built in C for the Operating Systems programming assignment.
 
 ## Build
 
+Requires GCC, Make, and GNU Readline development files.
+
 ```bash
 make
 ```
@@ -13,6 +15,8 @@ make
 ```bash
 ./bin/myshell
 ```
+
+Features include built-in commands, command history with `!n`, Readline editing and completion, I/O redirection, pipes, background jobs, `if-then-else-fi`, and shell variables.
 
 ## Clean
 

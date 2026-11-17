@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -Iinclude
-LDFLAGS =
+LDFLAGS = -lreadline
 
 SRC = src/main.c src/shell.c src/execute.c
 OBJ = obj/main.o obj/shell.o obj/execute.o
