@@ -650,6 +650,7 @@ static void print_help(void) {
     printf("  help          Show this help message\n");
     printf("  jobs          List active background jobs\n");
     printf("  history       Show previously entered commands\n");
+    printf("  set           List shell variables\n");
     printf("  !n            Re-execute command number n from history\n");
     printf("  Tab           Complete commands and filenames\n");
     printf("  Up/Down       Browse Readline command history\n");
