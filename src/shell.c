@@ -15,8 +15,16 @@ typedef struct {
 
 static Job jobs[MAX_JOBS];
 
+typedef struct Variable {
+    char* name;
+    char* value;
+    struct Variable* next;
+} Variable;
+
+static Variable* variables = NULL;
+
 static const char* builtin_names[] = {
-    "cd", "exit", "help", "jobs", "history", NULL
+    "cd", "exit", "help", "jobs", "history", "set", NULL
 };
 
 typedef enum {
@@ -224,6 +232,135 @@ void print_jobs(void) {
     }
 }
 
+void set_variable(const char* name, const char* value) {
+    if (name == NULL || value == NULL || *name == '\0') {
+        return;
+    }
+
+    for (Variable* v = variables; v != NULL; v = v->next) {
+        if (strcmp(v->name, name) == 0) {
+            free(v->value);
+            v->value = strdup(value);
+            return;
+        }
+    }
+
+    Variable* v = malloc(sizeof(Variable));
+    v->name = strdup(name);
+    v->value = strdup(value);
+    v->next = variables;
+    variables = v;
+}
+
+const char* get_variable(const char* name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    for (Variable* v = variables; v != NULL; v = v->next) {
+        if (strcmp(v->name, name) == 0) {
+            return v->value;
+        }
+    }
+    return NULL;
+}
+
+void print_variables(void) {
+    for (Variable* v = variables; v != NULL; v = v->next) {
+        printf("%s=%s\n", v->name, v->value);
+    }
+}
+
+int is_assignment(const char* text) {
+    if (text == NULL) {
+        return 0;
+    }
+
+    const char* eq = strchr(text, '=');
+    if (eq == NULL || eq == text) {
+        return 0;
+    }
+
+    for (const char* p = text; p < eq; p++) {
+        if (!(isalnum((unsigned char)*p) || *p == '_')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+char* expand_variables(const char* text) {
+    if (text == NULL) {
+        return NULL;
+    }
+
+    size_t capacity = strlen(text) * 2 + 1;
+    if (capacity < 16) capacity = 16;
+    char* out = malloc(capacity);
+    size_t len = 0;
+
+    for (size_t i = 0; text[i] != '\0';) {
+        if (text[i] == '$' && text[i + 1] != '\0') {
+            char name[128];
+            size_t nlen = 0;
+            size_t consumed = 1;
+
+            if (text[i + 1] == '{') {
+                size_t j = i + 2;
+                while (text[j] != '\0' && text[j] != '}' && nlen < sizeof(name) - 1) {
+                    name[nlen++] = text[j++];
+                }
+                if (text[j] == '}') {
+                    consumed = j - i + 1;
+                } else {
+                    nlen = 0;
+                }
+            } else {
+                size_t j = i + 1;
+                while ((isalnum((unsigned char)text[j]) || text[j] == '_') &&
+                       nlen < sizeof(name) - 1) {
+                    name[nlen++] = text[j++];
+                }
+                consumed = nlen + 1;
+            }
+
+            if (nlen > 0) {
+                name[nlen] = '\0';
+                const char* value = get_variable(name);
+                size_t add = (value != NULL) ? strlen(value) : 0;
+                while (len + add + 1 > capacity) {
+                    capacity *= 2;
+                    char* resized = realloc(out, capacity);
+                    if (resized == NULL) {
+                        free(out);
+                        return NULL;
+                    }
+                    out = resized;
+                }
+                if (value != NULL) {
+                    memcpy(out + len, value, add);
+                    len += add;
+                }
+                i += consumed;
+                continue;
+            }
+        }
+
+        if (len + 2 > capacity) {
+            capacity *= 2;
+            char* resized = realloc(out, capacity);
+            if (resized == NULL) {
+                free(out);
+                return NULL;
+            }
+            out = resized;
+        }
+        out[len++] = text[i++];
+    }
+
+    out[len] = '\0';
+    return out;
+}
+
 void free_chain(ChainItem* items, int count) {
     for (int i = 0; i < count; i++) {
         free(items[i].text);
@@ -247,15 +384,13 @@ int split_chain(const char* line, ChainItem* items, int max_items) {
         char c = *p;
 
         if (quote != 0) {
-            if (c == quote) {
-                quote = 0;
-            } else if (len < MAX_LEN - 1) {
-                buffer[len++] = c;
-            }
+            if (len < MAX_LEN - 1) buffer[len++] = c;
+            if (c == quote) quote = 0;
             continue;
         }
 
         if (c == '\'' || c == '"') {
+            if (len < MAX_LEN - 1) buffer[len++] = c;
             quote = c;
             continue;
         }
@@ -441,8 +576,10 @@ int parse_pipeline(const char* line, Pipeline* pipeline) {
                     fprintf(stderr, "shell: too many arguments\n");
                     ok = 0;
                 } else {
-                    current->argv[argc++] = token->text;
+                    char* expanded = expand_variables(token->text);
+                    free(token->text);
                     token->text = NULL;
+                    current->argv[argc++] = expanded;
                 }
                 break;
 
@@ -472,15 +609,17 @@ int parse_pipeline(const char* line, Pipeline* pipeline) {
                     break;
                 }
                 i++;
+                char* expanded_name = expand_variables(tokens[i].text);
+                free(tokens[i].text);
+                tokens[i].text = NULL;
                 if (token->type == TOK_IN) {
                     free(current->infile);
-                    current->infile = tokens[i].text;
+                    current->infile = expanded_name;
                 } else {
                     free(current->outfile);
-                    current->outfile = tokens[i].text;
+                    current->outfile = expanded_name;
                     current->append = (token->type == TOK_APPEND);
                 }
-                tokens[i].text = NULL;
                 break;
         }
     }
@@ -550,6 +689,11 @@ int handle_builtin(char** arglist) {
 
     if (strcmp(arglist[0], "history") == 0) {
         print_history();
+        return 1;
+    }
+
+    if (strcmp(arglist[0], "set") == 0) {
+        print_variables();
         return 1;
     }
 

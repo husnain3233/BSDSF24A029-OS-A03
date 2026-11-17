@@ -56,6 +56,12 @@ void add_job(pid_t pid, const char* command);
 void reap_jobs(void);
 void print_jobs(void);
 
+void set_variable(const char* name, const char* value);
+const char* get_variable(const char* name);
+void print_variables(void);
+char* expand_variables(const char* text);
+int is_assignment(const char* text);
+
 int handle_builtin(char** arglist);
 
 #endif

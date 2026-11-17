@@ -24,6 +24,34 @@ static int is_keyword(const char* line, const char* keyword) {
            (p[len] == '\0' || isspace((unsigned char)p[len]));
 }
 
+static int execute_item(ChainItem* item) {
+    Pipeline pipeline;
+    int handled = 0;
+    int status = 0;
+
+    if (!parse_pipeline(item->text, &pipeline)) {
+        return 1;
+    }
+
+    Command* single = &pipeline.commands[0];
+    if (pipeline.count == 1 && single->argv[1] == NULL && is_assignment(single->argv[0])) {
+        const char* eq = strchr(single->argv[0], '=');
+        char* name = strndup(single->argv[0], (size_t)(eq - single->argv[0]));
+        set_variable(name, eq + 1);
+        free(name);
+        handled = 1;
+    } else if (pipeline.count == 1 && single->infile == NULL && single->outfile == NULL) {
+        handled = handle_builtin(single->argv);
+    }
+
+    if (!handled) {
+        status = execute_pipeline(&pipeline, item->background, item->text);
+    }
+
+    free_pipeline(&pipeline);
+    return status;
+}
+
 static int run_line(const char* line) {
     ChainItem items[MAX_CHAIN];
     int count = split_chain(line, items, MAX_CHAIN);
@@ -34,18 +62,7 @@ static int run_line(const char* line) {
     }
 
     for (int i = 0; i < count; i++) {
-        Pipeline pipeline;
-        if (parse_pipeline(items[i].text, &pipeline)) {
-            int handled = 0;
-            Command* single = &pipeline.commands[0];
-            if (pipeline.count == 1 && single->infile == NULL && single->outfile == NULL) {
-                handled = handle_builtin(single->argv);
-            }
-            if (!handled) {
-                status = execute_pipeline(&pipeline, items[i].background, items[i].text);
-            }
-            free_pipeline(&pipeline);
-        }
+        status = execute_item(&items[i]);
     }
 
     free_chain(items, count);
@@ -164,18 +181,7 @@ int main() {
             item_count = split_chain(cmdline, items, MAX_CHAIN);
             if (item_count > 0) {
                 for (int i = 0; i < item_count; i++) {
-                    Pipeline pipeline;
-                    if (parse_pipeline(items[i].text, &pipeline)) {
-                        int handled = 0;
-                        Command* single = &pipeline.commands[0];
-                        if (pipeline.count == 1 && single->infile == NULL && single->outfile == NULL) {
-                            handled = handle_builtin(single->argv);
-                        }
-                        if (!handled) {
-                            execute_pipeline(&pipeline, items[i].background, items[i].text);
-                        }
-                        free_pipeline(&pipeline);
-                    }
+                    execute_item(&items[i]);
                 }
                 free_chain(items, item_count);
             }
