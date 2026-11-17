@@ -1,5 +1,6 @@
 #include "shell.h"
 #include <fcntl.h>
+#include <signal.h>
 
 static void close_pipes(int pipes[MAX_PIPES - 1][2], int stages) {
     for (int i = 0; i < stages - 1; i++) {
@@ -37,7 +38,7 @@ static void apply_redirection(Command* cmd) {
     }
 }
 
-int execute_pipeline(Pipeline* pipeline) {
+int execute_pipeline(Pipeline* pipeline, int background, const char* display) {
     int pipes[MAX_PIPES - 1][2];
     pid_t pids[MAX_PIPES];
     int stages = pipeline->count;
@@ -61,6 +62,11 @@ int execute_pipeline(Pipeline* pipeline) {
         pids[i] = fork();
 
         if (pids[i] == 0) {
+            if (background) {
+                signal(SIGINT, SIG_IGN);
+                signal(SIGQUIT, SIG_IGN);
+            }
+
             if (i > 0 && dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                 perror("dup2");
                 _exit(1);
@@ -89,6 +95,12 @@ int execute_pipeline(Pipeline* pipeline) {
     }
 
     close_pipes(pipes, stages);
+
+    if (background) {
+        add_job(pids[stages - 1], display);
+        printf("[%d] %ld\n", 1, (long)pids[stages - 1]);
+        return 0;
+    }
 
     for (int i = 0; i < stages; i++) {
         int child_status;

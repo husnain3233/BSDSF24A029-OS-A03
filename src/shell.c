@@ -7,6 +7,14 @@ static char* history[HISTORY_SIZE];
 static int history_count = 0;
 static int history_start = 0;
 
+typedef struct {
+    pid_t pid;
+    char* command;
+    int in_use;
+} Job;
+
+static Job jobs[MAX_JOBS];
+
 static const char* builtin_names[] = {
     "cd", "exit", "help", "jobs", "history", NULL
 };
@@ -118,6 +126,126 @@ char* resolve_history(const char* line) {
     int idx = (history_start + n - 1) % HISTORY_SIZE;
     printf("%s\n", history[idx]);
     return strdup(history[idx]);
+}
+
+void add_job(pid_t pid, const char* command) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (!jobs[i].in_use) {
+            jobs[i].pid = pid;
+            jobs[i].command = strdup(command != NULL ? command : "");
+            jobs[i].in_use = 1;
+            return;
+        }
+    }
+    fprintf(stderr, "jobs: job table is full\n");
+}
+
+void reap_jobs(void) {
+    int status;
+    pid_t pid;
+
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        for (int i = 0; i < MAX_JOBS; i++) {
+            if (jobs[i].in_use && jobs[i].pid == pid) {
+                free(jobs[i].command);
+                memset(&jobs[i], 0, sizeof(Job));
+                break;
+            }
+        }
+    }
+}
+
+void print_jobs(void) {
+    int found = 0;
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].in_use) {
+            printf("[%d] %ld  %s\n", i + 1, (long)jobs[i].pid, jobs[i].command);
+            found = 1;
+        }
+    }
+    if (!found) {
+        printf("No active background jobs.\n");
+    }
+}
+
+void free_chain(ChainItem* items, int count) {
+    for (int i = 0; i < count; i++) {
+        free(items[i].text);
+        items[i].text = NULL;
+        items[i].background = 0;
+    }
+}
+
+int split_chain(const char* line, ChainItem* items, int max_items) {
+    if (line == NULL || line[0] == '\0') {
+        return 0;
+    }
+
+    char buffer[MAX_LEN];
+    int len = 0;
+    int count = 0;
+    char quote = 0;
+    int background = 0;
+
+    for (const char* p = line; *p != '\0'; p++) {
+        char c = *p;
+
+        if (quote != 0) {
+            if (c == quote) {
+                quote = 0;
+            } else if (len < MAX_LEN - 1) {
+                buffer[len++] = c;
+            }
+            continue;
+        }
+
+        if (c == '\'' || c == '"') {
+            quote = c;
+            continue;
+        }
+
+        if (c == ';' || c == '&') {
+            if (c == '&') background = 1;
+            while (len > 0 && isspace((unsigned char)buffer[len - 1])) len--;
+            if (len > 0) {
+                if (count >= max_items) {
+                    fprintf(stderr, "shell: too many commands\n");
+                    free_chain(items, count);
+                    return -1;
+                }
+                buffer[len] = '\0';
+                items[count].text = strdup(buffer);
+                items[count].background = background;
+                count++;
+            }
+            len = 0;
+            background = 0;
+            continue;
+        }
+
+        if (len < MAX_LEN - 1) buffer[len++] = c;
+    }
+
+    if (quote != 0) {
+        fprintf(stderr, "shell: unmatched quote\n");
+        free_chain(items, count);
+        return -1;
+    }
+
+    while (len > 0 && isspace((unsigned char)buffer[len - 1])) len--;
+    if (len > 0) {
+        if (count >= max_items) {
+            fprintf(stderr, "shell: too many commands\n");
+            free_chain(items, count);
+            return -1;
+        }
+        buffer[len] = '\0';
+        items[count].text = strdup(buffer);
+        items[count].background = background;
+        count++;
+    }
+
+    return count;
 }
 
 static int is_operator(char c) {
@@ -325,12 +453,12 @@ static void print_help(void) {
     printf("  exit          Exit the shell\n");
     printf("  cd <dir>      Change the current working directory\n");
     printf("  help          Show this help message\n");
-    printf("  jobs          List background jobs (placeholder)\n");
+    printf("  jobs          List active background jobs\n");
     printf("  history       Show previously entered commands\n");
     printf("  !n            Re-execute command number n from history\n");
     printf("  Tab           Complete commands and filenames\n");
     printf("  Up/Down       Browse Readline command history\n");
-    printf("Operators: < input  > output  >> append  | pipe\n");
+    printf("Operators: < input  > output  >> append  | pipe  ; chain  & background\n");
 }
 
 int handle_builtin(char** arglist) {
@@ -360,7 +488,7 @@ int handle_builtin(char** arglist) {
     }
 
     if (strcmp(arglist[0], "jobs") == 0) {
-        printf("Job control not yet implemented.\n");
+        print_jobs();
         return 1;
     }
 
