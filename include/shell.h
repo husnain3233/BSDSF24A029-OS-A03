@@ -38,7 +38,8 @@ typedef struct {
     int background;
 } ChainItem;
 
-char* read_cmd(char* prompt, FILE* fp);
+char* read_cmd(const char* prompt, FILE* fp);
+char* read_full_command(const char* prompt);
 void initialize_readline(void);
 void add_to_history(const char* cmdline);
 void print_history(void);

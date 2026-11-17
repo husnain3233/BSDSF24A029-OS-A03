@@ -32,7 +32,7 @@ typedef struct {
     char* text;
 } Token;
 
-char* read_cmd(char* prompt, FILE* fp) {
+char* read_cmd(const char* prompt, FILE* fp) {
     (void)fp;
     char* line = readline(prompt);
     if (line != NULL && line[0] != '\0') {
@@ -70,6 +70,62 @@ static char** shell_completion(const char* text, int start, int end) {
 
 void initialize_readline(void) {
     rl_attempted_completion_function = shell_completion;
+}
+
+static const char* skip_spaces(const char* text) {
+    while (text != NULL && isspace((unsigned char)*text)) text++;
+    return text;
+}
+
+static int keyword_line(const char* line, const char* keyword) {
+    const char* p = skip_spaces(line);
+    size_t len = strlen(keyword);
+    if (strncmp(p, keyword, len) != 0) return 0;
+    return p[len] == '\0' || isspace((unsigned char)p[len]);
+}
+
+char* read_full_command(const char* prompt) {
+    char* first = read_cmd(prompt, stdin);
+    if (first == NULL) {
+        return NULL;
+    }
+
+    if (!keyword_line(first, "if")) {
+        return first;
+    }
+
+    size_t capacity = strlen(first) + 1;
+    char* block = strdup(first);
+    free(first);
+
+    while (1) {
+        char* line = read_cmd("> ", stdin);
+        if (line == NULL) {
+            free(block);
+            return NULL;
+        }
+
+        size_t needed = strlen(block) + strlen(line) + 2;
+        if (needed > capacity) {
+            capacity = needed;
+            char* resized = realloc(block, capacity);
+            if (resized == NULL) {
+                free(block);
+                free(line);
+                return NULL;
+            }
+            block = resized;
+        }
+
+        strcat(block, "\n");
+        strcat(block, line);
+
+        int done = keyword_line(line, "fi");
+        free(line);
+        if (done) break;
+    }
+
+    return block;
 }
 
 void add_to_history(const char* cmdline) {
