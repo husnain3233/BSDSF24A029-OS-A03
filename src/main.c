@@ -1,10 +1,20 @@
 #include "shell.h"
 
 int main() {
+    char* raw;
     char* cmdline;
     char** arglist;
 
-    while ((cmdline = read_cmd(PROMPT, stdin)) != NULL) {
+    while ((raw = read_cmd(PROMPT, stdin)) != NULL) {
+        cmdline = resolve_history(raw);
+        free(raw);
+
+        if (cmdline == NULL) {
+            continue;
+        }
+
+        add_to_history(cmdline);
+
         if ((arglist = tokenize(cmdline)) != NULL) {
             if (!handle_builtin(arglist)) {
                 execute(arglist);
